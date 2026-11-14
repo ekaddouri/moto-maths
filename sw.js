@@ -1,5 +1,5 @@
 // Changez ce numéro à chaque mise à jour du jeu (v1 -> v2 -> v3...)
-const VERSION = 'v1';
+const VERSION = 'v2';
 const CACHE = 'smm3-' + VERSION;
 const ASSETS = [
   './', 'index.html', 'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png',

@@ -9,6 +9,7 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const COLORS = ['#ff5964', '#ffd166', '#38bdf8'], LET = ['A', 'B', 'C'];
 const stars = n => '★'.repeat(n) + '☆'.repeat(3 - n);
+const CREDIT = '<p class="credit">Conçu par El Hassane KADDOURI · Lycée Alfred Sauvy · 2026-2027</p>';
 const coarse = matchMedia('(pointer: coarse)').matches;
 const motionPref = matchMedia('(prefers-reduced-motion: reduce)').matches;
 let race = null, paused = false, frozen = false, panels = [], lastOpts = null, target = null, onHome = false;
@@ -33,7 +34,7 @@ function profile() {
     '<input id="inCls" placeholder="Ta classe (ex. TMA1)" maxlength="12" value="' + esc(S.cls) + '">' +
     '<p id="msg" class="note"></p><p>Ces informations restent sur ton appareil.</p>' +
     '<button class="bigbtn" data-act="saveProfile">C\'EST PARTI</button>' +
-    '<button class="btn" data-act="transfer">📥 J\'ai déjà joué ailleurs : importer ma progression</button>');
+    '<button class="btn" data-act="transfer">📥 J\'ai déjà joué ailleurs : importer ma progression</button>' + CREDIT);
 }
 
 function home() {
@@ -52,7 +53,7 @@ function home() {
     '<button class="btn" data-act="defi">🎯 Défi par code<small>Rejoue la course d\'un ami</small></button>' +
     '<button class="btn" data-act="bilan">📊 Mon bilan</button>' +
     '<button class="btn" data-act="garage">🏍 Garage et réglages</button>' +
-    '<button class="btn" data-act="prof">🎓 Espace prof</button>' + inst);
+    '<button class="btn" data-act="prof">🎓 Espace prof</button>' + inst + CREDIT);
   onHome = true;
 }
 
