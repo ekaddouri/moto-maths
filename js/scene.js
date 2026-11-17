@@ -280,7 +280,9 @@ export function frame(dt, t, race, views) {
     const p = race ? race.players[vw.i] : null, bx = bikes[vw.i] ? bikes[vw.i].position.x : 0;
     // chaque joueur ne voit grossir que le portail qu'il a choisi lui-même
     if (qa) portals.forEach((g, k) => { g.scale.setScalar((1 + 0.05 * Math.sin(t * 5 + k)) * (p && p.choice === k ? 1.18 : 1)); });
-    const asp = vw.w / vw.h, sp = (p && !reduced) ? (p.speed - CFG.BASEV) / (CFG.MAXV - CFG.BASEV) : 0;
+    const asp = vw.w / vw.h;
+    // élargissement du champ de vision proportionnel à la place du pilote dans sa plage de vitesse
+    const sp = (p && !reduced) ? Math.max(0, Math.min(1, (p.speed - p.vmin) / Math.max(1, p.vcap - p.vmin))) : 0;
     const sh = (p && dt > 0 && !reduced) ? Math.max(0, 1 - (race.t - p.hitT) / 0.5) * 0.25 + Math.max(0, 1 - (race.t - p.boostT) / 0.6) * 0.08 : 0;
     cam.aspect = asp; cam.fov = (asp < 1 ? 76 : 58) + sp * 16; cam.updateProjectionMatrix();
     cam.position.set(bx * 0.85 + 1.1 + (Math.random() - 0.5) * sh, (asp < 1 ? 3.4 : 2.8) + (Math.random() - 0.5) * sh, asp < 1 ? 8.2 : 6.8);

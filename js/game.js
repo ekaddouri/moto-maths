@@ -1,5 +1,17 @@
 import { BANK } from './questions.js';
 
+/* ===== MODES DE VITESSE (proposition 1) =====
+   Chaque mode définit une plage de vitesse dans laquelle le pilote évolue.
+   vmin / vmax : bornes de la plage (km/h) — cruise : vitesse de croisière au départ.
+   lvl : niveau de difficulté des questions au départ (l'adaptatif reste libre ensuite). */
+export const MODES = [
+  { id: 'D', name: 'Débutant', sub: 'moins de 90 km/h', vmin: 60, vmax: 89, cruise: 72, lvl: 1, dot: '#39ff88' },
+  { id: 'I', name: 'Intermédiaire', sub: 'de 90 à 140 km/h', vmin: 90, vmax: 140, cruise: 108, lvl: 2, dot: '#ffd166' },
+  { id: 'C', name: 'Confirmé', sub: 'plus de 140 km/h', vmin: 141, vmax: 220, cruise: 168, lvl: 3, dot: '#ff5964' }
+];
+export const modeById = id => MODES.find(m => m.id === id) || MODES[1];
+export const MODE_NAME = id => modeById(id).name;
+
 /* ===== RÉGLAGES FACILES À MODIFIER ===== */
 export const CFG = {
   NQ: 10,            // questions par course solo
@@ -8,6 +20,8 @@ export const CFG = {
   LIFE_STREAK: 3,    // une vie regagnée toutes les 3 bonnes réponses de suite
   SAFE_Q: 3,         // pas de fin de partie pendant les 3 premières questions
   BASEV: 80, MAXV: 220, MINV: 70, BOOST: 15, PENALTY: 35,   // vitesses en km/h
+  REV: 5,            // km/h gagnés ou perdus par appui sur ↑ / ↓
+  PUSH_DECAY: 1.5,   // durée (s) de l'effet d'une bonne ou d'une mauvaise réponse sur la vitesse
   READ: 6,           // secondes de ralenti pour lire (sans graphique)
   READ_GRAPH: 7,     // idem avec graphique ou tableau
   ACT: 5,            // secondes supplémentaires avant les portails
@@ -36,19 +50,28 @@ export const mult = p => Math.min(5, 1 + (Math.max(p.streak, 1) - 1) * 0.5);
 const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 
 export class Race {
-  // o = { mode:'solo'|'duel'|'defi', circuit:0..3, fixed:[numéros de questions] }
+  // o = { mode:'solo'|'duel'|'defi', circuit:0..3, fixed:[numéros de questions], modeIdx:0..2 }
   constructor(o, ui) {
     this.ui = ui; this.mode = o.mode; this.duel = o.mode === 'duel';
     this.noLives = o.mode !== 'solo';   // duel et défi : toutes les questions sont jouées
+    // Mode de vitesse : choisi en solo, imposé (Intermédiaire) en duel et en défi
+    this.modeIdx = Number.isInteger(o.modeIdx) ? Math.max(0, Math.min(MODES.length - 1, o.modeIdx)) : 1;
+    this.speedMode = MODES[this.modeIdx];
+    this.manual = !this.duel;           // en duel, pas de réglage manuel (2 joueurs, mêmes conditions)
     this.circuit = CIRCUITS[o.circuit]; this.fixed = o.fixed || null;
     this.nq = this.fixed ? this.fixed.length : (this.duel ? CFG.NQ_DUEL : CFG.NQ);
     this.players = [];
     for (let i = 0; i < (this.duel ? 2 : 1); i++) this.players.push({
       lane: 1, laneX: 1, choice: null, choiceT: 0, lives: CFG.LIVES, streak: 0, score: 0, correct: 0,
-      speed: CFG.BASEV, vmax: CFG.BASEV, time: 0, missed: [], boostT: -9, hitT: -9, orbs: 0
+      cruise: this.speedMode.cruise,              // vitesse visée, réglable avec ↑ / ↓
+      speed: this.speedMode.cruise,               // vitesse réelle (suit la croisière + l'effet des réponses)
+      vmin: this.speedMode.vmin, vcap: this.speedMode.vmax,   // plage autorisée par le mode
+      vmax: this.speedMode.cruise,                // record de vitesse atteint
+      push: 0, pushT: -9,                         // écart temporaire dû à la dernière réponse
+      time: 0, missed: [], boostT: -9, hitT: -9, orbs: 0
     });
     this.t = 0; this.dist = 0; this.v = 0; this.slow = 1; this.answered = 0; this.over = false;
-    this.level = this.circuit.lvl; this.okRun = 0; this.koRun = 0; this.retry = [];
+    this.level = this.speedMode.lvl || this.circuit.lvl; this.okRun = 0; this.koRun = 0; this.retry = [];
     this.used = new Set(); this.ids = []; this.ents = []; this.qa = null;
     this.stats = { G: [0, 0], D: [0, 0], E: [0, 0] };
     this.thOff = Math.floor(Math.random() * 3);
@@ -89,13 +112,20 @@ export class Race {
     this.phase = 'question'; this.ui.question(this.qa);
   }
 
-  // a = 'L', 'R', 'OK' ou un numéro de voie 0..2
+  // a = 'L', 'R', 'OK', 'UP', 'DN' ou un numéro de voie 0..2
   input(i, a) {
     const p = this.players[i]; if (!p || this.phase === 'done') return;
+    if (a === 'UP' || a === 'DN') { this.throttle(p, a === 'UP' ? 1 : -1); return; }   // n'engage pas la voie
     if (a === 'L') p.lane = Math.max(0, p.lane - 1);
     else if (a === 'R') p.lane = Math.min(2, p.lane + 1);
     else if (typeof a === 'number') p.lane = Math.max(0, Math.min(2, a));
     if (this.phase === 'question') { p.choice = p.lane; p.choiceT = this.qa.t; this.ui.choice(i); }
+  }
+
+  // Réglage manuel de la vitesse de croisière, borné par la plage du mode
+  throttle(p, d) {
+    if (!this.manual) return;
+    p.cruise = Math.max(p.vmin, Math.min(p.vcap, p.cruise + d * CFG.REV));
   }
 
   spawnRow() {
@@ -105,10 +135,13 @@ export class Race {
     if (Math.random() < 0.35) this.ents.push({ type: 'boost', lane: l[2], z, hit: false });
   }
 
+  // pousse la vitesse de p pendant CFG.PUSH_DECAY secondes (positive = accélération)
+  pushSpeed(p, amount) { p.push = amount; p.pushT = this.t; }
+
   collide(p, e) {
-    if (e.type === 'obs') { p.speed = Math.max(CFG.MINV, p.speed - 20); p.hitT = this.t; this.ui.sfx('hit'); }
+    if (e.type === 'obs') { this.pushSpeed(p, -CFG.PENALTY * 0.6); p.hitT = this.t; this.ui.sfx('hit'); }
     else if (e.type === 'orb') { p.orbs++; p.score += Math.round(10 * mult(p)); this.ui.sfx('orb'); }
-    else { p.speed = Math.min(CFG.MAXV, p.speed + 10); p.vmax = Math.max(p.vmax, p.speed); p.boostT = this.t; this.ui.sfx('boost'); }
+    else { this.pushSpeed(p, CFG.BOOST * 1.8); p.boostT = this.t; this.ui.sfx('boost'); }
   }
 
   update(dt) {
@@ -117,7 +150,15 @@ export class Race {
     const P = this.players;
     const slowTarget = (this.phase === 'question' && this.qa.t < this.qa.read) ? 0.35 : 1;
     this.slow += (slowTarget - this.slow) * Math.min(1, dt * 4);
-    let sp = 0; P.forEach(p => { sp += p.speed; p.laneX += (p.lane - p.laneX) * Math.min(1, dt * 10); });
+    let sp = 0;
+    P.forEach(p => {
+      // vitesse réelle = croisière du pilote + effet temporaire de la dernière réponse
+      const dec = Math.max(0, 1 - (this.t - p.pushT) / CFG.PUSH_DECAY);
+      const want = Math.max(p.vmin, Math.min(p.vcap, p.cruise + p.push * dec));
+      p.speed += (want - p.speed) * Math.min(1, dt * 5);
+      if (p.speed > p.vmax) p.vmax = p.speed;
+      sp += p.speed; p.laneX += (p.lane - p.laneX) * Math.min(1, dt * 10);
+    });
     this.v = sp / P.length / 3.6 * this.slow;
     const d = this.v * dt; this.dist += d;
 
@@ -155,11 +196,13 @@ export class Race {
       p.time += none ? a.T0 : p.choiceT;
       if (ok) {
         p.correct++; p.streak++;
-        p.speed = Math.min(CFG.MAXV, p.speed + CFG.BOOST); p.vmax = Math.max(p.vmax, p.speed);
-        r.gain = Math.round(100 * mult(p) + p.speed / 2); p.score += r.gain; p.boostT = this.t;
+        this.pushSpeed(p, CFG.BOOST); p.boostT = this.t;
+        r.gain = Math.round(100 * mult(p) + p.speed / 2); p.score += r.gain;
+        // une bonne réponse fait aussi gagner un peu de croisière, dans la limite du mode
+        this.throttle(p, 1);
         if (!this.noLives && p.streak % CFG.LIFE_STREAK === 0 && p.lives < CFG.MAXLIVES) { p.lives++; r.life = true; }
       } else {
-        p.streak = 0; p.speed = Math.max(CFG.MINV, p.speed - CFG.PENALTY); p.missed.push(a.id); p.hitT = this.t;
+        p.streak = 0; this.pushSpeed(p, -CFG.PENALTY); p.missed.push(a.id); p.hitT = this.t;
         if (!this.noLives) { p.lives--; if (p.lives <= 0 && this.answered <= CFG.SAFE_Q) { p.lives = 1; r.shield = true; } }
       }
       res.push(r);
@@ -188,7 +231,8 @@ export class Race {
     return {
       win, pct, stars: win ? (pct >= 0.9 ? 3 : pct >= 0.7 ? 2 : 1) : 0,
       score: p.score, correct: p.correct, answered: this.answered, vmax: p.vmax,
-      dist: this.dist / 1000, missed: p.missed, ids: this.ids, stats: this.stats
+      dist: this.dist / 1000, missed: p.missed, ids: this.ids, stats: this.stats,
+      modeId: this.speedMode.id
     };
   }
 }

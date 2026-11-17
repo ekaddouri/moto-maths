@@ -1,9 +1,9 @@
 import { BANK, THEME_NAMES } from './questions.js';
-import { Race, CIRCUITS, SKINS, mult } from './game.js';
+import { Race, CIRCUITS, SKINS, MODES, mult } from './game.js';
 import * as G3 from './scene.js';
 import { graphSVG, tabSVG } from './graph.js';
 import * as SND from './audio.js';
-import { S, persist, pilotLevel, pct, themeRank, bilanText, verify, makeDefi, readDefi, exportSave, importSave } from './store.js';
+import { S, persist, bestOf, pilotLevel, pct, themeRank, bilanText, verify, makeDefi, readDefi, exportSave, importSave } from './store.js';
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -60,12 +60,28 @@ function home() {
 function circuits() {
   let h = '<h1>CIRCUITS</h1>';
   CIRCUITS.forEach((c, i) => {
-    const open = i === 0 || S.circ[i - 1].s >= 1;
-    h += '<button class="btn' + (open ? '' : ' lock') + '" ' + (open ? 'data-act="play" data-v="' + i + '"' : '') + '>' + (open ? '' : '🔒 ') + c.name +
-      ' <span style="color:#ffd166">' + stars(S.circ[i].s) + '</span><small>' + c.sub +
-      (open ? (S.circ[i].b ? ' — record : ' + S.circ[i].b + ' pts' : '') : ' — termine le circuit précédent') + '</small></button>';
+    const w = bestOf(S.circ[i]);
+    const open = i === 0 || bestOf(S.circ[i - 1]).s >= 1;
+    h += '<button class="btn' + (open ? '' : ' lock') + '" ' + (open ? 'data-act="modes" data-v="' + i + '"' : '') + '>' + (open ? '' : '🔒 ') + c.name +
+      ' <span style="color:#ffd166">' + stars(w.s) + '</span><small>' + c.sub +
+      (open ? (w.b ? ' — record : ' + w.b + ' pts' : '') : ' — termine le circuit précédent') + '</small></button>';
   });
   show(h + '<button class="btn" data-act="home">← Menu</button>');
+}
+
+/* Choix du mode de vitesse pour un circuit (proposition 1) */
+function modes(ci) {
+  const c = CIRCUITS[ci];
+  let h = '<h1>' + c.name + '</h1><p>' + c.sub + '<br><b>Choisis ton rythme</b></p>';
+  MODES.forEach((m, mi) => {
+    const w = S.circ[ci][m.id];
+    h += '<button class="btn modebtn' + (S.mode === mi ? ' on' : '') + '" data-act="go" data-v="' + ci + '" data-m="' + mi + '">' +
+      '<span class="dot" style="background:' + m.dot + '"></span>' + m.name +
+      '<span class="band">' + m.sub + '</span><small>' +
+      (w.s ? '<span style="color:#ffd166">' + stars(w.s) + '</span>' + (w.b ? ' — record ' + w.b + ' pts' : '') : 'pas encore joué') +
+      '</small></button>';
+  });
+  show(h + '<button class="btn" data-act="circuits">← Circuits</button>');
 }
 
 function garage() {
@@ -88,7 +104,7 @@ function bilan() {
     '<div class="stat"><b>' + pilotLevel(S.xp) + '</b><span>Niveau pilote</span></div>' +
     '<div class="stat"><b>' + S.runs + '</b><span>Courses</span></div>';
   Object.keys(THEME_NAMES).forEach(k => { h += '<div class="stat"><b>' + (pct(k) === null ? '—' : pct(k) + ' %') + '</b><span>' + THEME_NAMES[k] + '</span></div>'; });
-  h += '<div class="stat"><b>' + S.circ.reduce((a, c) => a + c.s, 0) + '/12</b><span>Étoiles</span></div></div>';
+  h += '<div class="stat"><b>' + S.circ.reduce((a, c) => a + bestOf(c).s, 0) + '/12</b><span>Étoiles</span></div></div>';
   if (r) h += '<p>💪 Point fort : <b>' + THEME_NAMES[r.best] + '</b>' + (r.worst !== r.best ? '<br>🎯 À travailler : <b>' + THEME_NAMES[r.worst] + '</b>' : '') + '</p>';
   h += recap(S.missed, 'Dernières questions ratées');
   h += '<h2>Envoyer à mon prof</h2><textarea id="ta" readonly>' + esc(bilanText()) + '</textarea><p id="msg" class="note"></p>' +
@@ -263,6 +279,7 @@ const ui = {
 function startRace(o) {
   lastOpts = o; $('#screen').hidden = true; closeModal();
   const duel = o.mode === 'duel';
+  if (Number.isInteger(o.modeIdx)) { S.mode = o.modeIdx; persist(); }   // mémorise le dernier mode choisi
   buildPanels(duel ? 2 : 1);
   G3.setTheme(o.circuit); G3.setBikes(duel ? [S.skin, (S.skin + 1) % SKINS.length] : [S.skin]);
   race = new Race(o, ui); paused = frozen = false;
@@ -271,7 +288,11 @@ function startRace(o) {
 function pause() {
   if (!race || race.phase === 'done' || paused || frozen) return;
   paused = true; SND.music(false);
-  modal('<h2>⏸ Pause</h2><button class="bigbtn" data-act="resume">REPRENDRE</button>' +
+  const pl = race.players[0];
+  modal('<h2>⏸ Pause</h2>' +
+    '<p class="note">Mode ' + race.speedMode.name + ' · ' + Math.round(pl.cruise) + ' km/h' +
+    (race.manual ? ' (↑ ↓ pour régler la vitesse)' : ' — vitesse verrouillée en duel') + '</p>' +
+    '<button class="bigbtn" data-act="resume">REPRENDRE</button>' +
     (race.duel ? '<button class="btn" data-act="flip">🔄 Retourner l\'écran du joueur 2<small>pour jouer face à face, téléphone posé à plat</small></button>' : '') +
     '<button class="btn" data-act="home">Quitter la course</button>');
 }
@@ -287,11 +308,12 @@ function endRace() {
   S.runs++; S.xp += r.score;
   for (const k in r.stats) { S.th[k][0] += r.stats[k][0]; S.th[k][1] += r.stats[k][1]; }
   S.missed = r.missed.concat(S.missed).filter((v, i, a) => a.indexOf(v) === i).slice(0, 8);
+  const mi = Number.isInteger(o.modeIdx) ? o.modeIdx : 1;
   let news = '';
   if (o.mode === 'solo') {
-    const c = S.circ[o.circuit];
-    if (r.stars > c.s) { if (!c.s && o.circuit < 3) news += '<p class="note">🔓 Circuit débloqué : ' + CIRCUITS[o.circuit + 1].name + '</p>'; c.s = r.stars; }
-    if (r.score > c.b) { c.b = r.score; news += '<p class="note">🏆 Nouveau record !</p>'; }
+    const was = bestOf(S.circ[o.circuit]).s, c = S.circ[o.circuit][MODES[mi].id];
+    if (r.stars > c.s) { if (was === 0 && o.circuit < 3) news += '<p class="note">🔓 Circuit débloqué : ' + CIRCUITS[o.circuit + 1].name + '</p>'; c.s = r.stars; }
+    if (r.score > c.b) { c.b = r.score; news += '<p class="note">🏆 Nouveau record en ' + MODES[mi].name + ' !</p>'; }
   }
   const lv1 = pilotLevel(S.xp);
   if (lv1 > lv0) {
@@ -308,7 +330,8 @@ function endRace() {
     h += '<h2>' + (tie ? '🤝 Égalité parfaite !' : me ? '🏆 Défi remporté !' : '💪 Défi perdu… revanche ?') + '</h2>' +
       '<p>Toi : <b>' + r.correct + '/' + r.answered + '</b> (' + r.score + ' pts)<br>Ton adversaire : <b>' + target.correct + '/' + target.ids.length + '</b> (' + target.score + ' pts)</p>';
   }
-  h += '<div class="statgrid"><div class="stat"><b>' + r.correct + '/' + r.answered + '</b><span>Bonnes réponses</span></div>' +
+  h += '<p>Mode <b>' + MODES[mi].name + '</b> — ' + MODES[mi].sub + '</p>' +
+    '<div class="statgrid"><div class="stat"><b>' + r.correct + '/' + r.answered + '</b><span>Bonnes réponses</span></div>' +
     '<div class="stat"><b>' + r.score + '</b><span>Score</span></div>' +
     '<div class="stat"><b>' + Math.round(r.vmax) + '</b><span>Vitesse max (km/h)</span></div>' +
     '<div class="stat"><b>' + r.dist.toFixed(1).replace('.', ',') + ' km</b><span>Distance</span></div></div>' + news +
@@ -346,7 +369,8 @@ const ACT = {
     if (!importSave($('#inSave').value)) { m.textContent = 'Code invalide : recopie-le en entier, sans rien modifier.'; return; }
     m.textContent = '✔ Progression importée !'; setTimeout(() => { closeModal(); if (S.name) home(); else profile(); }, 900);
   },
-  play(v) { startRace({ mode: 'solo', circuit: +v }); },
+  modes: v => modes(+v),
+  go: (v, b) => startRace({ mode: 'solo', circuit: +v, modeIdx: +b.dataset.m }),
   duel() { startRace({ mode: 'duel', circuit: 3 }); },
   defiGo() {
     const d = readDefi($('#inCode').value);
@@ -388,8 +412,12 @@ document.addEventListener('click', ev => {
 });
 window.addEventListener('keydown', ev => {
   if (!race || paused || frozen) return;
-  const k = ev.key.toLowerCase(), two = race.players.length > 1, pr = two ? 1 : 0;
-  const m = { arrowleft: [pr, 'L'], arrowright: [pr, 'R'], arrowup: [pr, 'OK'], q: [0, 'L'], d: [0, 'R'], z: [0, 'OK'], ' ': [0, 'OK'] }[k];
+  const k = ev.key.toLowerCase(), two = race.players.length > 1;
+  // Solo : ↑ / ↓ règlent la vitesse (proposition 2), ← / → changent de voie, Espace ou Entrée valident.
+  // Duel : flèches = joueur 2 (voie + validation), Q / D / Z = joueur 1 ; la vitesse n'y est pas réglable.
+  const m = (two
+    ? { arrowleft: [1, 'L'], arrowright: [1, 'R'], arrowup: [1, 'OK'], ' ': [1, 'OK'], enter: [1, 'OK'], q: [0, 'L'], d: [0, 'R'], z: [0, 'OK'] }
+    : { arrowleft: [0, 'L'], arrowright: [0, 'R'], arrowup: [0, 'UP'], arrowdown: [0, 'DN'], ' ': [0, 'OK'], enter: [0, 'OK'] })[k];
   if (m) { race.input(m[0], m[1]); ev.preventDefault(); }
   else if (!two && k.length === 1 && '123'.indexOf(k) >= 0) race.input(0, +k - 1);
   else if (k === 'escape' || k === 'p') pause();
